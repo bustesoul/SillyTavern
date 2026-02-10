@@ -8844,8 +8844,6 @@ export function isSwipingAllowed() {
         chat.length !== 0 &&
         //The swipes setting must be enabled, and swipes can't be hidden.
         swipes && !swipesHidden &&
-        //Cannot swipe while generating.
-        !isGenerating() &&
         //If mid-swipe, the message cannot be swiped.
         swipeState === SWIPE_STATE.NONE
     );
@@ -8870,9 +8868,6 @@ export function isMessageSwipeable(messageId, message = undefined) {
     if (
         //Only messages below the currently edited message can be swiped, if it's not mid-swipe edit.
         ((messageId > (this_edit_mes_id ?? -1)) && (swipeState != SWIPE_STATE.EDITING)) &&
-
-        //If the message is the last message, and it exists.
-        (messageId == chat.length - 1) &&
         (message &&
             //Small system messages cannot be swiped.
             !(message?.extra?.isSmallSys) &&
@@ -8909,6 +8904,8 @@ export function getOverswipeBehavior(messageId, message = undefined) {
     else if (message?.extra?.swipeable === false) return OVERSWIPE_BEHAVIOR.NONE;
     //Small System messages can't be swiped.
     else if (message?.extra?.isSmallSys) return OVERSWIPE_BEHAVIOR.NONE;
+    // Historic messages should only browse existing swipes, never trigger regeneration.
+    else if (messageId !== chat.length - 1) return OVERSWIPE_BEHAVIOR.LOOP;
     //The first message in a priistine chat will loop. It's chevrons will always be visible https://github.com/SillyTavern/SillyTavern/pull/4712#issuecomment-3557893373
     else if (isGreeting && isPristine) return OVERSWIPE_BEHAVIOR.PRISTINE_GREETING;
     //Non-user and non-prompt hidden messages will regenerate.
@@ -9639,9 +9636,9 @@ export async function swipe(event, direction, { source, repeated, message = chat
     if (source === SWIPE_SOURCE.DELETE || source === SWIPE_SOURCE.BACK || source === SWIPE_SOURCE.AUTO_SWIPE) {
         console.info(`The ${direction} swipe source on message #${mesId} is ${source}, Most checks have been bypassed. `);
     } else {
-        //Only show an error if swipes are not hidden and a message is generating.
-        if (isGenerating() && (swipes && !swipesHidden && (swipeState === SWIPE_STATE.NONE))) {
-            toastr.warning(t`Cannot swipe while generating. Stop the request and try again.`, t`Swipe aborted`);
+        // While generating, only allow swiping back to existing candidates.
+        if (isGenerating() && direction !== SWIPE_DIRECTION.LEFT && mesId === chat.length - 1 && (swipes && !swipesHidden && (swipeState === SWIPE_STATE.NONE))) {
+            toastr.warning(t`Cannot swipe right on the latest message while generating. Stop the request and try again.`, t`Swipe aborted`);
             return;
         }
         //Only allow one concurrent swipe.
@@ -10808,8 +10805,8 @@ jQuery(async function () {
     ///// SWIPE BUTTON CLICKS ///////
 
     //limit swiping to only last message clicks
-    $(document).on('click', '.last_mes .swipe_right', async (e, data) => await swipe(e, SWIPE_DIRECTION.RIGHT, data));
-    $(document).on('click', '.last_mes .swipe_left', async (e, data) => await swipe(e, SWIPE_DIRECTION.LEFT, data));
+    $(document).on('click', '.mes .swipe_right', async (e, data) => await swipe(e, SWIPE_DIRECTION.RIGHT, data));
+    $(document).on('click', '.mes .swipe_left', async (e, data) => await swipe(e, SWIPE_DIRECTION.LEFT, data));
 
     initCharacterSearch();
 
