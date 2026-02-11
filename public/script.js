@@ -9664,7 +9664,11 @@ export async function swipe(event, direction, { source, repeated, message = chat
     } else {
         //Only allow one concurrent swipe.
         if (!isSwipingAllowed()) {
-            console.info('The swipe has been ignored messages cannot currently be swiped.');
+            // During in-flight generation there can be a short lock window (e.g. swipe transition).
+            // Ignore silently to avoid noisy/misleading console logs while generation swiping is enabled.
+            if (!(isGenerating() && swipeState !== SWIPE_STATE.NONE)) {
+                console.info('The swipe has been ignored messages cannot currently be swiped.');
+            }
             return;
         }
         if (!isMessageSwipeable(mesId, message)) {
@@ -9721,11 +9725,16 @@ export async function swipe(event, direction, { source, repeated, message = chat
      * @param {boolean} revert Attept to revert the swipe without saving.
      */
     async function endSwipe(revert = false) {
+        // Release swipe lock immediately after the swipe transition.
+        // This keeps swipe controls/gestures usable while a new swipe is still generating.
+        swipeState = SWIPE_STATE.NONE;
+        delete document.body.dataset.swiping;
+        showSwipeButtons();
+
         //Wait for the generation to end.
         try {
             //`mes_buttons` need to be hidden until the animation completes.
             if (generation) {
-                document.body.dataset.swiping = 'true';
                 await generation;
             }
         }
@@ -9781,10 +9790,6 @@ export async function swipe(event, direction, { source, repeated, message = chat
             saveChatDebounced();
         }
 
-        //Allow for another swipe.
-        swipeState = SWIPE_STATE.NONE;
-        delete document.body.dataset.swiping;
-        showSwipeButtons();
     }
 
     async function standardSwipe(newSwipeId) {
