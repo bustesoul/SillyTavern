@@ -3358,7 +3358,7 @@ class StreamingProcessor {
      * @param {string} continueMessage Previous message if the type is 'continue'
      * @param {PromptReasoning} promptReasoning Prompt reasoning instance
      */
-    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning) {
+    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning, streamingSwipeId = null) {
         this.result = '';
         this.messageId = -1;
         /** @type {HTMLElement} */
@@ -3396,7 +3396,7 @@ class StreamingProcessor {
         /** @type {string?} */
         this.reasoningSignature = null;
         /** @type {number?} */
-        this.streamingSwipeId = null;
+        this.streamingSwipeId = Number.isInteger(streamingSwipeId) && streamingSwipeId >= 0 ? streamingSwipeId : null;
     }
 
     /**
@@ -3444,11 +3444,9 @@ class StreamingProcessor {
             this.sendTextarea.value = '';
             this.sendTextarea.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            await saveReply({ type: this.type, getMessage: text, fromStreaming: true });
+            await saveReply({ type: this.type, getMessage: text, fromStreaming: true, targetSwipeId: this.streamingSwipeId });
             messageId = chat.length - 1;
-            this.streamingSwipeId = null;
-
-            if ((this.type === 'swipe' || this.type === 'continue') && messageId >= 0 && Array.isArray(chat[messageId]?.swipes)) {
+            if (!Number.isInteger(this.streamingSwipeId) && (this.type === 'swipe' || this.type === 'continue') && messageId >= 0 && Array.isArray(chat[messageId]?.swipes)) {
                 const swipeId = Number(chat[messageId]?.swipe_id);
                 if (Number.isInteger(swipeId) && swipeId >= 0) {
                     this.streamingSwipeId = swipeId;
@@ -4078,7 +4076,7 @@ function removeLastMessage() {
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, streamingSwipeId = null } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
@@ -5173,7 +5171,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
+            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning, streamingSwipeId);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
                 streamingProcessor.firstMessageText = '';
@@ -6372,7 +6370,7 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, targetSwipeId = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -6401,8 +6399,10 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     const generationFinished = new Date();
     if (type === 'swipe') {
         oldMessage = chat[chat.length - 1]['mes'];
-        chat[chat.length - 1]['swipes'].length++;
-        if (chat[chat.length - 1]['swipe_id'] === chat[chat.length - 1]['swipes'].length - 1) {
+        const activeSwipeId = Number(chat[chat.length - 1]['swipe_id']);
+        const swipeSlotId = Number.isInteger(targetSwipeId) && targetSwipeId >= 0 ? targetSwipeId : activeSwipeId;
+        chat[chat.length - 1]['swipes'].length = Math.max(chat[chat.length - 1]['swipes'].length + 1, swipeSlotId + 1);
+        if (activeSwipeId === swipeSlotId) {
             chat[chat.length - 1]['title'] = title;
             chat[chat.length - 1]['mes'] = getMessage;
             chat[chat.length - 1]['gen_started'] = generation_started;
@@ -6519,7 +6519,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         item['swipe_info'] = [];
     }
     if (item['swipe_id'] !== undefined) {
-        const swipeId = item['swipe_id'];
+        const swipeId = Number.isInteger(targetSwipeId) && targetSwipeId >= 0 ? targetSwipeId : item['swipe_id'];
         item['swipes'][swipeId] = item['mes'];
         item['swipe_info'][swipeId] = {
             send_date: item['send_date'],
@@ -10006,7 +10006,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
 
         if (run_generate && !is_send_press) {
             is_send_press = true;
-            generation = Generate('swipe');
+            generation = Generate('swipe', { streamingSwipeId: newSwipeId });
         }
 
         //Swipe in from the opposite side.
