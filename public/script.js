@@ -6402,6 +6402,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     if (type === 'swipe') {
         oldMessage = chat[chat.length - 1]['mes'];
         chat[chat.length - 1]['swipes'].length++;
+        // Always switch to the newest swipe slot before writing streaming content.
+        chat[chat.length - 1]['swipe_id'] = chat[chat.length - 1]['swipes'].length - 1;
         if (chat[chat.length - 1]['swipe_id'] === chat[chat.length - 1]['swipes'].length - 1) {
             chat[chat.length - 1]['title'] = title;
             chat[chat.length - 1]['mes'] = getMessage;
