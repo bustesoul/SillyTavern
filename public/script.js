@@ -3536,6 +3536,12 @@ class StreamingProcessor {
 
             const isStreamingSwipeVisible = !Number.isInteger(this.streamingSwipeId) || chat[messageId]['swipe_id'] === this.streamingSwipeId;
 
+            // If user is viewing a different swipe branch while this one is streaming,
+            // keep the active branch content intact instead of replacing `mes` with stream chunks.
+            if (!isStreamingSwipeVisible && Number.isInteger(chat[messageId]['swipe_id'])) {
+                syncSwipeToMes(messageId, chat[messageId]['swipe_id']);
+            }
+
             const formattedText = messageFormatting(
                 processedText,
                 chat[messageId].name,
