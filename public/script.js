@@ -6422,8 +6422,6 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
             addOneMessage(chat[chat_id], { type: 'swipe' });
             !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
-        } else {
-            chat[chat.length - 1]['mes'] = getMessage;
         }
     } else if (type === 'append' || type === 'continue') {
         console.debug('Trying to append.');
@@ -6520,7 +6518,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     }
     if (item['swipe_id'] !== undefined) {
         const swipeId = Number.isInteger(targetSwipeId) && targetSwipeId >= 0 ? targetSwipeId : item['swipe_id'];
-        item['swipes'][swipeId] = item['mes'];
+        const shouldWriteTargetSwipeMessage = type === 'swipe' && Number.isInteger(targetSwipeId) && targetSwipeId >= 0 && swipeId !== item['swipe_id'];
+        item['swipes'][swipeId] = shouldWriteTargetSwipeMessage ? getMessage : item['mes'];
         item['swipe_info'][swipeId] = {
             send_date: item['send_date'],
             gen_started: item['gen_started'],
