@@ -1604,8 +1604,6 @@ export async function sendTextareaMessage() {
     if (is_send_press) return;
     if (isExecutingCommandsFromChatInput) return;
 
-    hideSwipeButtons(); //Swipe buttons must be hidden now, otherwise concurrent generations are possible.
-
     let generateType = 'normal';
     // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
     // message was sent from a character (not the user or the system).
@@ -1625,9 +1623,7 @@ export async function sendTextareaMessage() {
         await newAssistantChat({ temporary: false });
     }
 
-    let generation = await Generate(generateType);
-    showSwipeButtons();
-    return generation;
+    return await Generate(generateType);
 }
 
 /**
@@ -3399,6 +3395,8 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        /** @type {number?} */
+        this.streamingSwipeId = null;
     }
 
     /**
@@ -3448,10 +3446,19 @@ class StreamingProcessor {
         } else {
             await saveReply({ type: this.type, getMessage: text, fromStreaming: true });
             messageId = chat.length - 1;
+            this.streamingSwipeId = null;
+
+            if ((this.type === 'swipe' || this.type === 'continue') && messageId >= 0 && Array.isArray(chat[messageId]?.swipes)) {
+                const swipeId = Number(chat[messageId]?.swipe_id);
+                if (Number.isInteger(swipeId) && swipeId >= 0) {
+                    this.streamingSwipeId = swipeId;
+                }
+            }
+
             await this.#checkDomElements(messageId, continueOnReasoning);
             this.markUIGenStarted();
         }
-        hideSwipeButtons({ hideCounters: true });
+        refreshSwipeButtons();
         scrollChatToBottom({ waitForFrame: true });
         return messageId;
     }
@@ -3519,14 +3526,17 @@ class StreamingProcessor {
             }
 
             if ((this.type == 'swipe' || this.type === 'continue') && Array.isArray(chat[messageId]['swipes'])) {
-                chat[messageId]['swipes'][chat[messageId]['swipe_id']] = processedText;
-                chat[messageId]['swipe_info'][chat[messageId]['swipe_id']] = {
+                const targetSwipeId = Number.isInteger(this.streamingSwipeId) ? this.streamingSwipeId : chat[messageId]['swipe_id'];
+                chat[messageId]['swipes'][targetSwipeId] = processedText;
+                chat[messageId]['swipe_info'][targetSwipeId] = {
                     'send_date': chat[messageId]['send_date'],
                     'gen_started': chat[messageId]['gen_started'],
                     'gen_finished': chat[messageId]['gen_finished'],
                     'extra': structuredClone(chat[messageId]['extra']),
                 };
             }
+
+            const isStreamingSwipeVisible = !Number.isInteger(this.streamingSwipeId) || chat[messageId]['swipe_id'] === this.streamingSwipeId;
 
             const formattedText = messageFormatting(
                 processedText,
@@ -3537,7 +3547,7 @@ class StreamingProcessor {
                 {},
                 false,
             );
-            if (this.messageTextDom instanceof HTMLElement) {
+            if (isStreamingSwipeVisible && this.messageTextDom instanceof HTMLElement) {
                 if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
                 } else {
@@ -3546,7 +3556,7 @@ class StreamingProcessor {
             }
 
             const timePassed = formatGenerationTimer(this.timeStarted, currentTime, currentTokenCount, this.reasoningHandler.getDuration(), this.timeToFirstToken);
-            if (this.messageTimerDom instanceof HTMLElement) {
+            if (isStreamingSwipeVisible && this.messageTimerDom instanceof HTMLElement) {
                 this.messageTimerDom.textContent = timePassed.timerValue;
                 this.messageTimerDom.title = timePassed.timerTitle;
             }
@@ -3584,7 +3594,13 @@ class StreamingProcessor {
             message.swipe_info.push(...swipeInfoArray);
         }
 
-        syncMesToSwipe(messageId);
+        const targetSwipeId = Number.isInteger(this.streamingSwipeId) ? this.streamingSwipeId : null;
+        syncMesToSwipe(messageId, targetSwipeId);
+
+        if (targetSwipeId !== null && chat[messageId]?.swipe_id !== targetSwipeId) {
+            syncSwipeToMes(messageId, chat[messageId]?.swipe_id);
+        }
+
         saveLogprobsForActiveMessage(this.messageLogprobs.filter(Boolean), this.continueMessage);
 
         if (Array.isArray(this.images) && this.images.length > 0) {
@@ -4116,8 +4132,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             throw new Error('Server unreachable');
         }
 
-        // Hide swipes if not in a dry run.
-        hideSwipeButtons();
+        // Keep swipe controls available during generation.
+        refreshSwipeButtons();
         // If generated any message, set the flag to indicate it can't be recreated again.
         chat_metadata['tainted'] = true;
     }
@@ -5165,7 +5181,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             streamingProcessor.generator = await sendStreamingRequest(type, generate_data);
 
-            hideSwipeButtons();
             let getMessage = await streamingProcessor.generate();
             let messageChunk = cleanUpMessage({
                 getMessage: getMessage,
@@ -6607,9 +6622,10 @@ export function ensureSwipes(message) {
  *
  * If the swipe data is invalid in some way, this function will exit out without doing anything.
  * @param {number?} [messageId=null] - The ID of the message to sync with the swipe data. If no ID is given, the last message is used.
+ * @param {number?} [swipeId=null] - The target swipe ID to sync to. If no ID is given, the message's current swipe_id is used.
  * @returns {boolean} Whether the message was successfully synced
  */
-export function syncMesToSwipe(messageId = null) {
+export function syncMesToSwipe(messageId = null, swipeId = null) {
     if (!chat.length) {
         return false;
     }
@@ -6625,8 +6641,17 @@ export function syncMesToSwipe(messageId = null) {
         return false;
     }
 
+    if (swipeId !== null) {
+        if (isNaN(swipeId) || swipeId < 0) {
+            console.warn(`[syncMesToSwipe] Invalid swipe ID: ${swipeId}`);
+            return false;
+        }
+    }
+
+    const targetSwipeId = swipeId ?? targetMessage.swipe_id;
+
     // No swipe data there yet, exit out
-    if (typeof targetMessage.swipe_id !== 'number') {
+    if (typeof targetSwipeId !== 'number') {
         return false;
     }
     // If swipes structure is invalid, exit out (for now?)
@@ -6635,16 +6660,16 @@ export function syncMesToSwipe(messageId = null) {
     }
     // If the swipe is not present yet, exit out (will likely be copied later)
     // "" is falsy. An empty string is a valid message.
-    if (typeof targetMessage.swipes[targetMessage.swipe_id] !== 'string' || !targetMessage.swipe_info[targetMessage.swipe_id]) {
+    if (typeof targetMessage.swipes[targetSwipeId] !== 'string' || !targetMessage.swipe_info[targetSwipeId]) {
         return false;
     }
 
-    const targetSwipeInfo = targetMessage.swipe_info[targetMessage.swipe_id];
+    const targetSwipeInfo = targetMessage.swipe_info[targetSwipeId];
     if (typeof targetSwipeInfo !== 'object') {
         return false;
     }
 
-    targetMessage.swipes[targetMessage.swipe_id] = targetMessage.mes;
+    targetMessage.swipes[targetSwipeId] = targetMessage.mes;
 
     targetSwipeInfo.send_date = targetMessage.send_date;
     targetSwipeInfo.gen_started = targetMessage.gen_started;
@@ -6784,7 +6809,7 @@ export function getGeneratingModel(mes) {
 export function activateSendButtons() {
     is_send_press = false;
     hideStopButton();
-    showSwipeButtons();
+    refreshSwipeButtons();
     delete document.body.dataset.generating;
 }
 
@@ -6793,7 +6818,7 @@ export function activateSendButtons() {
  */
 export function deactivateSendButtons() {
     showStopButton();
-    hideSwipeButtons();
+    refreshSwipeButtons();
     document.body.dataset.generating = 'true';
 }
 
@@ -8844,8 +8869,6 @@ export function isSwipingAllowed() {
         chat.length !== 0 &&
         //The swipes setting must be enabled, and swipes can't be hidden.
         swipes && !swipesHidden &&
-        //Cannot swipe while generating.
-        !isGenerating() &&
         //If mid-swipe, the message cannot be swiped.
         swipeState === SWIPE_STATE.NONE
     );
@@ -9639,11 +9662,6 @@ export async function swipe(event, direction, { source, repeated, message = chat
     if (source === SWIPE_SOURCE.DELETE || source === SWIPE_SOURCE.BACK || source === SWIPE_SOURCE.AUTO_SWIPE) {
         console.info(`The ${direction} swipe source on message #${mesId} is ${source}, Most checks have been bypassed. `);
     } else {
-        //Only show an error if swipes are not hidden and a message is generating.
-        if (isGenerating() && (swipes && !swipesHidden && (swipeState === SWIPE_STATE.NONE))) {
-            toastr.warning(t`Cannot swipe while generating. Stop the request and try again.`, t`Swipe aborted`);
-            return;
-        }
         //Only allow one concurrent swipe.
         if (!isSwipingAllowed()) {
             console.info('The swipe has been ignored messages cannot currently be swiped.');
@@ -9993,7 +10011,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
     if (mesId === Number(this_edit_mes_id)) {
         closeMessageEditor();
     }
-    if (isStreamingEnabled() && streamingProcessor) {
+    if (isStreamingEnabled() && streamingProcessor && !isGenerating()) {
         streamingProcessor.onStopStreaming();
     }
 
@@ -10063,6 +10081,29 @@ export async function swipe(event, direction, { source, repeated, message = chat
 
         //If overswiping.
         if (newSwipeId >= chat[mesId]['swipes'].length) {
+            if (isGenerating()) {
+                const generatingSwipeId = Number(streamingProcessor?.streamingSwipeId);
+                const generatingMessageId = Number(streamingProcessor?.messageId);
+
+                if (
+                    Number.isInteger(generatingSwipeId) &&
+                    Number.isInteger(generatingMessageId) &&
+                    generatingMessageId === mesId &&
+                    generatingSwipeId >= 0 &&
+                    generatingSwipeId < chat[mesId]['swipes'].length
+                ) {
+                    if (chat[mesId]['swipes'][generatingSwipeId] === '') {
+                        chat[mesId]['swipes'][generatingSwipeId] = '...';
+                    }
+
+                    await standardSwipe(generatingSwipeId);
+                    return;
+                }
+
+                await endSwipe();
+                return;
+            }
+
             newSwipeId = chat[mesId]['swipes'].length;
 
             //Update the swipe_id.
