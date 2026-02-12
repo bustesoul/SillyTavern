@@ -8895,9 +8895,6 @@ export function isMessageSwipeable(messageId, message = undefined) {
     if (
         //Only messages below the currently edited message can be swiped, if it's not mid-swipe edit.
         ((messageId > (this_edit_mes_id ?? -1)) && (swipeState != SWIPE_STATE.EDITING)) &&
-
-        //If the message is the last message, and it exists.
-        (messageId == chat.length - 1) &&
         (message &&
             //Small system messages cannot be swiped.
             !(message?.extra?.isSmallSys) &&
@@ -8925,6 +8922,8 @@ export function isMessageSwipeable(messageId, message = undefined) {
 export function getOverswipeBehavior(messageId, message = undefined) {
     message ??= chat[messageId];
 
+    const isLastMessage = messageId === chat.length - 1;
+
     const isPristine = !chat_metadata?.tainted;
     const isGreeting = messageId === 0;
 
@@ -8934,6 +8933,8 @@ export function getOverswipeBehavior(messageId, message = undefined) {
     else if (message?.extra?.swipeable === false) return OVERSWIPE_BEHAVIOR.NONE;
     //Small System messages can't be swiped.
     else if (message?.extra?.isSmallSys) return OVERSWIPE_BEHAVIOR.NONE;
+    //Only the last message may overswipe into generation behaviors.
+    if (!isLastMessage) return OVERSWIPE_BEHAVIOR.NONE;
     //The first message in a priistine chat will loop. It's chevrons will always be visible https://github.com/SillyTavern/SillyTavern/pull/4712#issuecomment-3557893373
     else if (isGreeting && isPristine) return OVERSWIPE_BEHAVIOR.PRISTINE_GREETING;
     //Non-user and non-prompt hidden messages will regenerate.
@@ -10854,9 +10855,8 @@ jQuery(async function () {
 
     ///// SWIPE BUTTON CLICKS ///////
 
-    //limit swiping to only last message clicks
-    $(document).on('click', '.last_mes .swipe_right', async (e, data) => await swipe(e, SWIPE_DIRECTION.RIGHT, data));
-    $(document).on('click', '.last_mes .swipe_left', async (e, data) => await swipe(e, SWIPE_DIRECTION.LEFT, data));
+    $(document).on('click', '.mes .swipe_right', async (e, data) => await swipe(e, SWIPE_DIRECTION.RIGHT, data));
+    $(document).on('click', '.mes .swipe_left', async (e, data) => await swipe(e, SWIPE_DIRECTION.LEFT, data));
 
     initCharacterSearch();
 

@@ -1320,8 +1320,6 @@ body.swipeAllMessages .mes:not(.last_mes) .swipes-counter {
     }
 }
 
-/* Hide all but the last message. */
-body:not(.swipeAllMessages) .mes:not(.last_mes) :is(.swipe_left, .swipe_right, .swipes-counter),
 /* Hide non-visible swipe_left. */
 .mes:not(.swipes_visible) .swipe_left,
 /* Only hide swipe_right if it's not visible, and not the last swipe. */
